@@ -1,0 +1,951 @@
+{
+  "name": "WhatsApp AI Lead Response Assistant",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsapp-lead-agent",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "d910abc5-6ebe-42ef-ac50-8e09f88b9396",
+      "name": "WhatsApp Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1328,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst message = body.messages ? body.messages[0] : body;\n\nif (!message || message.from_me === true || !message.text || !message.text.body) {\n  return [];\n}\n\n// Ignore group messages entirely, groups are never real gym leads.\n// Individual chat IDs end in @s.whatsapp.net, group IDs end in @g.us\nif (message.chat_id && message.chat_id.includes('@g.us')) {\n  return [];\n}\n\n// Deduplicate by message id, some providers deliver the same message twice,\n// once on receipt, once on a status update. Skip anything already seen recently.\nconst msgId = message.id || message.message_id || '';\nif (msgId) {\n  const staticData = $getWorkflowStaticData('node');\n  if (!staticData.seenIds) staticData.seenIds = [];\n  if (staticData.seenIds.includes(msgId)) {\n    return [];\n  }\n  staticData.seenIds.push(msgId);\n  if (staticData.seenIds.length > 100) {\n    staticData.seenIds = staticData.seenIds.slice(-100);\n  }\n}\n\nreturn [{\n  json: {\n    sender_number: message.from || message.chat_id || '',\n    message_text: message.text.body,\n    timestamp: new Date().toISOString(),\n    sender_name: message.from_name || ''\n  }\n}];"
+      },
+      "id": "64ab1615-a9a6-4318-b009-f510600d73d0",
+      "name": "Extract Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1104,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "options": {},
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.groq_body }}"
+      },
+      "id": "155ae156-3420-40ef-ae0e-a05dba0a52ce",
+      "name": "Generate Answer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -448,
+        112
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Groq"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.route }}",
+              "rightValue": "handoff",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "54c8fba0-027b-4367-af3d-4b11e4e6cb8b",
+      "name": "Needs Human?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const variants = [\n  \"Let me get someone from the team to help you with that, they'll reach out shortly!\",\n  \"Good question! I'll have someone from our team get in touch with you shortly for that.\",\n  \"I'll connect you with our team for this, they'll reach out soon!\"\n];\nconst replyText = variants[Math.floor(Math.random() * variants.length)];\nconst priorHistory = $(\"Get History\").item.json[\"Conversation History\"] || \"\";\nconst newHistory = (priorHistory ? priorHistory + \"\\n\" : \"\") + \"Lead: \" + $(\"Extract Message\").item.json.message_text + \"\\nBot: \" + replyText;\nreturn [{\n  json: {\n    reply_text: replyText,\n    needs_followup: true,\n    conversation_history: newHistory,\n    whapi_body: JSON.stringify({\n      to: $(\"Extract Message\").item.json.sender_number,\n      body: replyText\n    })\n  }\n}];"
+      },
+      "id": "c7bcdccb-812c-46e6-8eb4-26f126ae812a",
+      "name": "Fallback Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const replyText = $json.choices[0].message.content;\nconst priorHistory = $('Get History').item.json['Conversation History'] || '';\nconst newHistory = (priorHistory ? priorHistory + '\\n' : '') + 'Lead: ' + $('Extract Message').item.json.message_text + '\\nBot: ' + replyText;\nreturn [{\n  json: {\n    reply_text: replyText,\n    needs_followup: false,\n    conversation_history: newHistory,\n    whapi_body: JSON.stringify({\n      to: $('Extract Message').item.json.sender_number,\n      body: replyText\n    })\n  }\n}];"
+      },
+      "id": "1219b345-d4a0-445f-ba4a-55e0fc596ccb",
+      "name": "Confident Answer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://gate.whapi.cloud/messages/text",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.whapi_body }}",
+        "options": {}
+      },
+      "id": "35e5a113-e02e-491d-85a0-77412d3902ba",
+      "name": "Send Reply",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        224,
+        112
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Whapi"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 2
+      },
+      "id": "b3f8c2d1-7e9a-4a6b-8c3d-1f2e3a4b5c6d",
+      "name": "Brief Pause",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        336,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id",
+          "cachedResultName": "Leads"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "Phone Number",
+              "lookupValue": "={{ $('Extract Message').item.json.sender_number }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "6fd7fc06-2621-48d3-bf13-d22c7c7990bf",
+      "name": "Lookup Existing Lead",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "alwaysOutputData": true,
+      "position": [
+        448,
+        112
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ String($json['Phone Number'] || '') }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "70d20998-144a-4bd4-a408-e47ca7166695",
+      "name": "Lead Exists?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        672,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id",
+          "cachedResultName": "Leads"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Phone Number": "={{ $('Extract Message').item.json.sender_number }}",
+            "Last Message": "={{ $('Extract Message').item.json.message_text }}",
+            "Last Timestamp": "={{ $('Extract Message').item.json.timestamp }}",
+            "Status": "={{ $('Fallback Message').isExecuted ? 'Needs Follow Up' : 'Answered' }}",
+            "Conversation History": "={{ $('Fallback Message').isExecuted ? $('Fallback Message').item.json.conversation_history : $('Confident Answer').item.json.conversation_history }}"
+          },
+          "matchingColumns": [
+            "Phone Number"
+          ],
+          "schema": [
+            {
+              "id": "Phone Number",
+              "displayName": "Phone Number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Name",
+              "displayName": "Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "First Message",
+              "displayName": "First Message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Last Message",
+              "displayName": "Last Message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Last Timestamp",
+              "displayName": "Last Timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "readOnly": true,
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "c1b04a94-2a9e-4c5b-b1b2-21c8a0652378",
+      "name": "Update Existing Lead",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        880,
+        32
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id",
+          "cachedResultName": "Leads"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Phone Number": "={{ $('Extract Message').item.json.sender_number }}",
+            "Name": "={{ $('Extract Message').item.json.sender_name }}",
+            "First Message": "={{ $('Extract Message').item.json.message_text }}",
+            "Last Message": "={{ $('Extract Message').item.json.message_text }}",
+            "Last Timestamp": "={{ $('Extract Message').item.json.timestamp }}",
+            "Status": "New",
+            "Conversation History": "={{ $('Fallback Message').isExecuted ? $('Fallback Message').item.json.conversation_history : $('Confident Answer').item.json.conversation_history }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Phone Number",
+              "displayName": "Phone Number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Name",
+              "displayName": "Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "First Message",
+              "displayName": "First Message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Last Message",
+              "displayName": "Last Message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Last Timestamp",
+              "displayName": "Last Timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "a9be894f-4b20-4da5-86a5-4a984e05afdd",
+      "name": "Create New Lead",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        880,
+        224
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.should_notify }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "9c3e1a2b-5f6d-4e8a-9b1c-7d2e4f5a6b8c",
+      "name": "Should Notify?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1216,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://gate.whapi.cloud/messages/text",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.whapi_body }}",
+        "options": {}
+      },
+      "id": "84c9991b-1847-4e5e-8b98-ccca725892b5",
+      "name": "Notify Owner",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1440,
+        32
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Whapi"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "OK",
+        "options": {}
+      },
+      "id": "15538d6d-1b38-42a9-82b3-dd730e7ed0c1",
+      "name": "200 OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1328,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "OK - Ignored",
+        "options": {}
+      },
+      "id": "716a105f-4a18-4e76-9a77-2910239a8ed2",
+      "name": "200 OK (Ignored)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        -448,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id",
+          "cachedResultName": "Leads"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "Phone Number",
+              "lookupValue": "={{ $('Extract Message').item.json.sender_number }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "e1f2a3b4-c5d6-7e8f-9a0b-1c2d3e4f5a6b",
+      "name": "Get History",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "alwaysOutputData": true,
+      "position": [
+        -1000,
+        208
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const history = $(\"Get History\").item.json[\"Conversation History\"] || \"No prior messages.\";\nconst messageText = $(\"Extract Message\").item.json.message_text;\nconst systemPrompt = \"You are the WhatsApp assistant for Example Fitness Club, the largest fitness center in the city. \" +\n  \"First decide if this message is a genuine gym related inquiry, using the conversation so far for context. \" +\n  \"A short message like a single word or a quick reply can still be gym related if it continues an ongoing gym conversation, so check the history before deciding. \" +\n  \"If this message is clearly not about the gym at all, such as personal chit chat, checking on someone's day, or something entirely unrelated to fitness, respond with exactly: IGNORE\\n\\n\" +\n  \"If the lead is simply acknowledging something, saying thanks, saying okay, or closing the conversation with no new question, reply with a short warm closing on your own, such as offering to help with anything else. Do not say NEEDS_HUMAN and do not say IGNORE for these.\\n\\n\" +\n  \"Otherwise, answer ONLY using the information below, word for word what it says, never guess, assume, or fill in a gap with general knowledge about gyms. \" +\n  \"If something is not explicitly written in the information below, treat it as unknown, even if it seems like an obvious yes, such as parking, WiFi, lockers, or anything else not listed. \" +\n  \"If the question cannot be answered from this information, OR if the lead asks to speak with a team member, \" +\n  \"requests a callback, or agrees to be contacted by staff, respond with exactly: NEEDS_HUMAN and nothing else, do not compose your own sentence about someone reaching out, use that exact token instead. \" +\n  \"This includes short replies like yes or sure that come right after you or the lead mentioned connecting with the team, treat that as agreeing to be contacted.\\n\\n\" +\n  \"CONVERSATION SO FAR:\\n\" + history + \"\\n\\n\" +\n  \"PRICING (EXAMPLE VALUES, replace with the client's real prices):\\n1 month: 1000\\n3 months: 2500\\n6 months: 4500\\n1 year: 8000\\n\\n\" +\n  \"OFFERS: EXAMPLE, 10% off for new members, 20% off group packages for 3 or more members joining together\\n\\n\" +\n  \"TIMINGS: Mon-Sat 6am-10pm, Sun 7am-12pm\\n\\n\" +\n  \"CLASS TIMINGS: EXAMPLE, Yoga Mon, Wed, Fri 7 to 8am. Zumba Tue, Thu, Sat 8 to 9am\\n\\n\" +\n  \"LOCATION: 1st floor, Example Building, Example Street, Example City\\n\\n\" +\n  \"FACILITIES: EXAMPLE, modern equipment, steam room, certified trainers, group classes, nutrition support\\n\\n\" +\n  \"DIETICIAN: EXAMPLE, a free consultation with the dietician can be arranged.\\n\\n\" +\n  \"POLICY: EXAMPLE, there is NO pause policy and NO transfer policy. State this directly and clearly, do not soften it and do not offer to connect the lead with the team since the answer is final.\\n\\n\" +\n  \"PT (personal training) cost is customised based on goals, tell the lead the team will share tailored pricing.\\n\\n\" +\n  \"Use the conversation so far to understand context, like if the lead says Yes after you offered something. \" +\n  \"Do not offer to have the team reach out or ask if they would like a callback as a normal closing line, only bring up the team when this specific reply is a genuine NEEDS_HUMAN case. \" +\n  \"When wrapping up a normal answer, close by asking if they want to know more about the gym instead. \" +\n  \"Keep replies short, friendly, and WhatsApp-appropriate.\";\nreturn [{\n  json: {\n    groq_body: JSON.stringify({\n      model: \"llama-3.3-70b-versatile\",\n      messages: [\n        { role: \"system\", content: systemPrompt },\n        { role: \"user\", content: messageText }\n      ],\n      temperature: 0.3\n    })\n  }\n}];"
+      },
+      "id": "f2a3b4c5-d6e7-8f9a-0b1c-2d3e4f5a6b7c",
+      "name": "Build Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -440,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ownerNumber = \"91XXXXXXXXXX\";\nconst senderNumber = $(\"Extract Message\").item.json.sender_number;\nconst messageText = $(\"Extract Message\").item.json.message_text;\nconst context = $json.notify_context || messageText;\nconst notifyText = \"New lead: \" + senderNumber + \". They have been asking about: \" + context;\nreturn [{\n  json: {\n    whapi_body: JSON.stringify({\n      to: ownerNumber,\n      body: notifyText\n    })\n  }\n}];"
+      },
+      "id": "b2f4c1a0-7e3d-4a2c-9c1e-5f6a8b9d0e1f",
+      "name": "Prepare Notify Body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1216,
+        32
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const isNewLead = $(\"Create New Lead\").isExecuted;\nconst previousStatus = isNewLead ? null : ($(\"Lookup Existing Lead\").item.json[\"Status\"] || \"\");\nconst currentStatus = $json[\"Status\"];\n\nlet shouldNotify = false;\nif (isNewLead) {\n  shouldNotify = true;\n} else if (currentStatus === \"Needs Follow Up\" && previousStatus !== \"Needs Follow Up\") {\n  shouldNotify = true;\n}\n\nconst history = $(\"Fallback Message\").isExecuted\n  ? $(\"Fallback Message\").item.json.conversation_history\n  : $(\"Confident Answer\").item.json.conversation_history;\nconst historyLines = (history || \"\").split(\"\\n\").filter(Boolean);\nconst leadLines = historyLines\n  .filter(line => line.startsWith(\"Lead:\"))\n  .map(line => line.replace(/^Lead:\\s*/, \"\"));\nconst recentContext = leadLines.slice(-3).join(\" / \");\n\nreturn [{\n  json: {\n    ...$json,\n    should_notify: shouldNotify,\n    notify_context: recentContext\n  }\n}];"
+      },
+      "id": "d7e8f9a0-1b2c-4d3e-9f8a-6c7d8e9f0a1b",
+      "name": "Determine Notify",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1104,
+        32
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = ($json.choices && $json.choices[0] && $json.choices[0].message && $json.choices[0].message.content) || \"\";\nconst upper = raw.trim().toUpperCase();\nlet route = \"answer\";\nif (upper.includes(\"IGNORE\")) {\n  route = \"ignore\";\n} else if (upper.includes(\"NEEDS_HUMAN\")) {\n  route = \"handoff\";\n}\n\nreturn [{\n  json: {\n    ...$json,\n    route: route\n  }\n}];"
+      },
+      "id": "f2a3b4c5-6d7e-4f8a-9b0c-1d2e3f4a5b6c",
+      "name": "Classify Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -448,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.route }}",
+              "rightValue": "ignore",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a3b4c5d6-7e8f-4a9b-8c0d-2e3f4a5b6c7d",
+      "name": "Should Ignore?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -320,
+        208
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "WhatsApp Webhook": {
+      "main": [
+        [
+          {
+            "node": "Extract Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Message": {
+      "main": [
+        [
+          {
+            "node": "Get History",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Answer": {
+      "main": [
+        [
+          {
+            "node": "Classify Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs Human?": {
+      "main": [
+        [
+          {
+            "node": "Fallback Message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Confident Answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fallback Message": {
+      "main": [
+        [
+          {
+            "node": "Send Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confident Answer": {
+      "main": [
+        [
+          {
+            "node": "Send Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Reply": {
+      "main": [
+        [
+          {
+            "node": "Brief Pause",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Brief Pause": {
+      "main": [
+        [
+          {
+            "node": "Lookup Existing Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lookup Existing Lead": {
+      "main": [
+        [
+          {
+            "node": "Lead Exists?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lead Exists?": {
+      "main": [
+        [
+          {
+            "node": "Update Existing Lead",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create New Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Existing Lead": {
+      "main": [
+        [
+          {
+            "node": "Determine Notify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create New Lead": {
+      "main": [
+        [
+          {
+            "node": "Determine Notify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Notify?": {
+      "main": [
+        [
+          {
+            "node": "Prepare Notify Body",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "200 OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Owner": {
+      "main": [
+        [
+          {
+            "node": "200 OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get History": {
+      "main": [
+        [
+          {
+            "node": "Build Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Prompt": {
+      "main": [
+        [
+          {
+            "node": "Generate Answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Notify Body": {
+      "main": [
+        [
+          {
+            "node": "Notify Owner",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Determine Notify": {
+      "main": [
+        [
+          {
+            "node": "Should Notify?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Response": {
+      "main": [
+        [
+          {
+            "node": "Should Ignore?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Ignore?": {
+      "main": [
+        [
+          {
+            "node": "200 OK (Ignored)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Needs Human?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "nodeGroups": [],
+  "tags": []
+}
