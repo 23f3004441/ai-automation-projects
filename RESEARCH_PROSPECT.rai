@@ -1,0 +1,103 @@
+{
+  "studio_id": "fdb7ab6d-d2eb-48e6-9cfc-83eb61c8f96f",
+  "version": "latest",
+  "in_marketplace": false,
+  "insert_date_": "2026-02-03T04:06:28.331Z",
+  "update_date_": "2026-05-13T12:10:42.902Z",
+  "is_hidden": false,
+  "publicly_triggerable": false,
+  "public": false,
+  "metadata": {},
+  "title": "RESEARCH PROSPECT",
+  "description": "Takes in a LinkedIn URL, scrapes their profile and then generates an AI summary of the prospect",
+  "transformations": {
+    "steps": [
+      {
+        "name": "linkedin",
+        "transformation": "get_linkedin_profile",
+        "params": {
+          "url": "{{linkedin_url}}",
+          "method": "Get User Profile"
+        },
+        "version": 1,
+        "version_metadata": {
+          "current_version": 1,
+          "latest_version": 1,
+          "has_update": false
+        }
+      },
+      {
+        "name": "linkedin_1",
+        "transformation": "get_linkedin_profile",
+        "params": {
+          "url": "{{linkedin_url}}",
+          "method": "Get User Posts"
+        },
+        "version": 1,
+        "version_metadata": {
+          "current_version": 1,
+          "latest_version": 1,
+          "has_update": false
+        }
+      },
+      {
+        "name": "llm",
+        "transformation": "prompt_completion",
+        "params": {
+          "prompt": "You are a professional business intelligence researcher. You have been given the content of a LinkedIn profile.\n\nYour task is to extract and organize the following information clearly:\n\n{{linkedin.data}}  \n1. Full name and current title\n\n2. All companies and organizations they are associated with (current and past) — include role, duration, and a one-line description of what each organization does\n\n3. The size and reach of any networks, communities, or clubs they lead or are part of (note any numbers claimed and flag if they seem self-reported vs verified)\n\n4. Any involvement in areas relevant to our business [LIST THE TOPICS THAT MATTER FOR YOUR OFFER] — highlight these specifically\n\n5. Any connections to international markets\n\n6. Social or community organizations — state how credible and active each one appears\n\n7. Overall assessment: Is this person a genuine, active professional with real networks, or primarily a personal brand builder? What is the most valuable thing about them from a business partnership perspective?\n\nBe factual. Do not pad the report. Flag anything that looks exaggerated or unverifiable.",
+          "model": "anthropic-claude-haiku-4-5",
+          "strip_linebreaks": false,
+          "temperature": 0,
+          "split_and_map": false,
+          "stream": false,
+          "parallel_tool_calls": false
+        },
+        "version": 1,
+        "version_metadata": {
+          "current_version": 1,
+          "latest_version": 1,
+          "has_update": false
+        },
+        "output": {
+          "answer": "{{answer}}"
+        }
+      }
+    ]
+  },
+  "params_schema": {
+    "properties": {
+      "linkedin_url": {
+        "metadata": {
+          "is_frontend_required": false,
+          "api_selector_placeholder": "Select Option...",
+          "hidden": false,
+          "relevance_only": false,
+          "advanced": false,
+          "dont_substitute": false
+        },
+        "order": 1,
+        "type": "string",
+        "title": "LinkedIn URL",
+        "description": "The LinkedIn URL of the prospect to scrape"
+      }
+    },
+    "required": [
+      "linkedin_url"
+    ],
+    "type": "object"
+  },
+  "output_schema": {},
+  "state_mapping": {
+    "linkedin_url": "params.linkedin_url",
+    "linkedin": "steps.linkedin.output",
+    "linkedin_1": "steps.linkedin_1.output",
+    "llm": "steps.llm.output"
+  },
+  "integration_requirements": {
+    "api_keys": [],
+    "oauth": []
+  },
+  "params": {
+    "linkedin_url": "https://www.linkedin.com/in/EXAMPLE/"
+  }
+}
